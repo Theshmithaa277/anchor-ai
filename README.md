@@ -1,26 +1,26 @@
-# ⚓ Anchor AI
+💻 Anchor AI
 
-**Multimodal RAG System with Security Guardrails**
+ Multimodal RAG System with Security Guardrails
 
 Anchor AI is a retrieval-augmented generation (RAG) system that answers questions grounded in your own documents, images, and videos — with built-in safety checks to ensure every answer is accurate, cited, and faithful to the source material.
 
 ---
 
-## 🚀 Features
+Features
 
-- **PDF Question Answering** — Ask questions directly against uploaded documents
-- **Image Understanding** — Extract and query information from images
-- **YouTube Knowledge Retrieval** — Ingest video transcripts (with auto-translation and Whisper fallback for non-captioned videos) and query their content
-- **Semantic Search using FAISS** — Fast, accurate vector-based retrieval over embedded documents
-- **Cross-Encoder Reranking** — Reranks retrieved chunks for higher relevance before generation
-- **Citation Generation** — Every answer is traceable back to its source
-- **Faithfulness Verification** — Flags and prevents hallucinated or unsupported claims
-- **Security Guardrails** — Fail-closed safety checks to block unsafe or out-of-scope queries
-- **Evaluation Framework** — Automated harness for measuring retrieval accuracy and guardrail performance
+- PDF Question Answering — Ask questions directly against uploaded documents
+- Image Understanding — Extract and query information from images
+- YouTube Knowledge Retrieval — Ingest video transcripts (with auto-translation and Whisper fallback for non-captioned videos) and query their content
+- Semantic Search using FAISS — Fast, accurate vector-based retrieval over embedded documents
+- Cross-Encoder Reranking — Reranks retrieved chunks for higher relevance before generation
+- Citation Generation — Every answer is traceable back to its source
+- Faithfulness Verification — Flags and prevents hallucinated or unsupported claims
+- Security Guardrails — Fail-closed safety checks to block unsafe or out-of-scope queries
+- Evaluation Framework — Automated harness for measuring retrieval accuracy and guardrail performance
 
 ---
 
-## 🛠 Tech Stack
+ 🛠 Tech Stack
 
 | Category | Tools |
 |---|---|
@@ -33,7 +33,7 @@ Anchor AI is a retrieval-augmented generation (RAG) system that answers question
 
 ---
 
-## 📂 Project Structure
+📂 Project Structure
 
 ```
 anchor-ai/
@@ -49,7 +49,7 @@ anchor-ai/
 
 ---
 
-## ⚙ Installation
+⚙ Installation
 
 ```bash
 # Clone the repository
@@ -71,7 +71,7 @@ GROQ_API_KEY=your_groq_api_key_here
 
 ---
 
-## ▶ Usage
+ ▶ Usage
 
 ```bash
 # Start the Flask server
