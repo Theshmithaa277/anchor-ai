@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment variables (contains API keys)
+.env
+
+# FAISS index
+faiss_index/
+
+# Evaluation data
+eval_data/
+
+# VS Code
+.vscode/
+
+# Temporary files
+*.log
+*.tmp
