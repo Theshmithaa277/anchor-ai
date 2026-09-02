@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anchor AI</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/onboarding.css') }}">
+</head>
+<body class="onboarding">
+
+  <nav class="onboarding-nav">
+    <div class="onboarding-wordmark"><strong>ANCHOR</strong> AI</div>
+    <div class="onboarding-wordmark">GROUNDED ANSWERS</div>
+  </nav>
+
+  <main class="welcome-stage">
+    <div class="welcome-copy">
+      <p class="eyebrow-label">Anchor AI &mdash; Private Knowledge Assistant</p>
+      <h1 class="display-heading">Welcome.</h1>
+      <p class="display-subcopy">
+        A quiet space to ask questions of your own documents, images,
+        and videos &mdash; answered with citations, and nothing else.
+      </p>
+      <a class="metallic-btn" style="display:inline-block;width:auto;padding:15px 34px;"
+         href="{{ url_for('auth.login') }}">
+        Let&rsquo;s Begin
+      </a>
+    </div>
+  </main>
+
+</body>
+</html>

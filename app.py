@@ -4,6 +4,7 @@ import tempfile
 import time
 
 from flask import Flask, request, jsonify, send_file
+from flask_login import login_required
 
 from load_to_faiss import load_pdf, load_image, load_youtube
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -11,6 +12,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 from quest import get_client, run_query
+
+from models import db
+from auth import auth_bp, bcrypt, login_manager
 
 
 # ---------------------------------------------------------
@@ -29,7 +33,26 @@ splitter = RecursiveCharacterTextSplitter(
 # APP
 # ---------------------------------------------------------
 
-app = Flask(__name__)
+app = Flask(__name__, instance_relative_config=True)
+
+# SECRET_KEY signs the session cookie used by Flask-Login — set a real
+# value in .env for production. The fallback here is only so local dev
+# doesn't crash on a missing env var; it must NOT be relied on outside dev.
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-only-insecure-key")
+
+os.makedirs(app.instance_path, exist_ok=True)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(
+    app.instance_path, "anchor_users.db"
+)
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db.init_app(app)
+bcrypt.init_app(app)
+login_manager.init_app(app)
+app.register_blueprint(auth_bp, url_prefix="/auth")
+
+with app.app_context():
+    db.create_all()
 
 
 # ---------------------------------------------------------
@@ -71,6 +94,7 @@ clear_saved_index()
 # ---------------------------------------------------------
 
 @app.route("/")
+@login_required
 def home():
     return send_file("anchor_ai.html")
 
@@ -80,6 +104,7 @@ def home():
 # ---------------------------------------------------------
 
 @app.route("/ask", methods=["POST"])
+@login_required
 def ask():
 
     global vectorstore
@@ -165,6 +190,7 @@ def ask():
 # ---------------------------------------------------------
 
 @app.route("/ingest", methods=["POST"])
+@login_required
 def ingest():
 
     global vectorstore

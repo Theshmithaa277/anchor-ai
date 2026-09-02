@@ -12,6 +12,10 @@ venv/
 # FAISS index
 faiss_index/
 
+# Auth database (SQLite, contains user records/password hashes)
+instance/
+*.db
+
 # Evaluation data
 eval_data/
 

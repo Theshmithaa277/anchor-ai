@@ -8,6 +8,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 
 <style>
+  /* Matches the @view-transition rule in static/css/onboarding.css so
+     arriving here from /auth/login or /auth/signup dissolves in instead
+     of hard-cutting. Chromium-based browsers only; other browsers just
+     navigate normally. Nothing else in this stylesheet is touched. */
+  @view-transition {
+    navigation: auto;
+  }
+
   :root {
     --bg-deep: #05060f;
     --ink: #eef2fa;

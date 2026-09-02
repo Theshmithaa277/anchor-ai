@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create Account &mdash; Anchor AI</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/onboarding.css') }}">
+<style>
+  /* Signup keeps the same component language as login, but mirrors the
+     composition (panel on the left) and shifts the light source to the
+     opposite corner for a distinct-but-related feel between the two
+     screens, per the creative direction. */
+  body.onboarding {
+    background:
+      radial-gradient(circle at 18% 92%, rgba(255, 255, 255, 0.55), transparent 45%),
+      linear-gradient(315deg, var(--pearl) 0%, #EFE8DF 46%, var(--tortilla) 100%);
+  }
+</style>
+</head>
+<body class="onboarding">
+
+  <nav class="onboarding-nav">
+    <a class="onboarding-wordmark" href="{{ url_for('auth.welcome') }}" style="text-decoration:none;">
+      <strong>ANCHOR</strong> AI
+    </a>
+    <div class="onboarding-wordmark">GROUNDED ANSWERS</div>
+  </nav>
+
+  <main class="auth-stage compose-left">
+    <div class="frosted-panel">
+      <h1 class="panel-heading">Create your account</h1>
+      <p class="panel-subcopy">A private space for your documents, images, and videos.</p>
+
+      {% with messages = get_flashed_messages(category_filter=["error"]) %}
+        {% if messages %}
+          <div class="form-error">{{ messages[0] }}</div>
+        {% endif %}
+      {% endwith %}
+
+      <form method="POST" action="{{ url_for('auth.signup') }}" novalidate>
+        <div class="field">
+          <input id="name" name="name" type="text" placeholder=" "
+                 value="{{ name or '' }}" required autocomplete="name">
+          <label for="name">Name</label>
+        </div>
+
+        <div class="field">
+          <input id="email" name="email" type="email" placeholder=" "
+                 value="{{ email or '' }}" required autocomplete="email">
+          <label for="email">Email</label>
+        </div>
+
+        <div class="field has-toggle">
+          <input id="password" name="password" type="password" placeholder=" "
+                 required autocomplete="new-password" minlength="8">
+          <label for="password">Password (min. 8 characters)</label>
+          <button type="button" class="field-toggle" data-password-toggle="password">Show</button>
+        </div>
+
+        <button type="submit" class="metallic-btn">Sign Up</button>
+        <button type="button" class="ghost-btn" disabled title="Coming soon">
+          Continue with Google
+        </button>
+      </form>
+
+      <p class="panel-footer">
+        Already have an account? <a href="{{ url_for('auth.login') }}">Log in</a>
+      </p>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/onboarding.js') }}"></script>
+</body>
+</html>
