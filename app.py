@@ -6,12 +6,12 @@ import time
 from flask import Flask, request, jsonify, send_file
 from flask_login import login_required
 
-from load_to_faiss import load_pdf, load_image, load_youtube
+from load_to_faiss import load_pdf, load_image, load_youtube, add_documents_to_index
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 
 from quest import get_client, run_query
+from cache import ResponseCache, make_cache_key
 
 from models import db
 from auth import auth_bp, bcrypt, login_manager
@@ -71,6 +71,12 @@ embeddings = HuggingFaceEmbeddings(
 # This prevents an old PDF from being automatically loaded
 # when Flask starts.
 vectorstore = None
+
+# Bumped on every successful /ingest — response_cache keys include this,
+# so a cached answer from before the latest upload is never served again.
+index_version = 0
+
+response_cache = ResponseCache(ttl_seconds=600, max_entries=500)
 
 
 # ---------------------------------------------------------
@@ -138,6 +144,17 @@ def ask():
         }), 400
 
     # -----------------------------------------------------
+    # RESPONSE CACHE (repeated queries against the same
+    # active index skip the whole pipeline — no retrieval,
+    # no rerank, no Groq calls at all).
+    # -----------------------------------------------------
+
+    cache_key = make_cache_key(query, index_version)
+    cached = response_cache.get(cache_key)
+    if cached is not None:
+        return jsonify({**cached, "cached": True})
+
+    # -----------------------------------------------------
     # RUN RAG QUERY
     # -----------------------------------------------------
 
@@ -167,10 +184,11 @@ def ask():
 
     total_ms = round((t1 - t0) * 1000)
 
-    return jsonify({
+    response_payload = {
         "answer": result["answer"],
         "blocked": result["blocked"],
         "num_sources": len(result["citations"]),
+        "citations": result["citations"],
         "faithfulness": (
             result["faithfulness"]["confidence"]
             if result["faithfulness"]
@@ -182,7 +200,16 @@ def ask():
             else True
         ),
         "total_ms": total_ms
-    })
+    }
+
+    # Don't cache blocked (guardrail-refused) answers or the "no
+    # vectorstore" early-return above — only cache genuine, successful
+    # RAG answers, so a transient safety-classifier hiccup never gets
+    # permanently baked into the cache for that query.
+    if not result["blocked"]:
+        response_cache.set(cache_key, response_payload)
+
+    return jsonify({**response_payload, "cached": False})
 
 
 # ---------------------------------------------------------
@@ -193,31 +220,30 @@ def ask():
 @login_required
 def ingest():
 
-    global vectorstore
+    global vectorstore, index_version
 
     try:
 
         # -------------------------------------------------
-        # VERY IMPORTANT
+        # INCREMENTAL INDEXING
         #
-        # Remove the previous knowledge BEFORE loading
-        # the new source.
+        # Previously this route wiped the entire index before
+        # loading each new source (PDF1 -> PDF2 meant PDF1
+        # disappeared completely). That's now replaced with
+        # incremental indexing: new uploads are ADDED to the
+        # existing knowledge base via add_documents_to_index(),
+        # which only embeds chunks that aren't already present
+        # (by content hash) rather than rebuilding the whole
+        # FAISS index from scratch every time.
         #
-        # Therefore:
-        #
-        # PDF1 -> PDF2
-        # PDF1 disappears completely.
-        #
-        # PDF -> YouTube
-        # PDF disappears completely.
+        # The index still starts empty each time the Flask
+        # process itself restarts (clear_saved_index() at
+        # startup, below, is unchanged).
         # -------------------------------------------------
 
         print("\n==============================")
         print("NEW SOURCE REQUESTED")
         print("==============================")
-
-        vectorstore = None
-        clear_saved_index()
 
         docs = []
 
@@ -339,37 +365,39 @@ def ingest():
         print("CHUNKS CREATED:", len(chunks))
 
         # -------------------------------------------------
-        # CREATE COMPLETELY NEW FAISS
+        # INCREMENTAL ADD TO FAISS
+        #
+        # Only chunks that aren't already in the index (by
+        # content hash) get embedded and added — a re-upload
+        # of the same file, or overlapping content between
+        # sources, doesn't pay to re-embed identical text.
         # -------------------------------------------------
 
-        print("Creating NEW FAISS index...")
+        print("Adding to FAISS index (incremental)...")
 
-        new_vectorstore = FAISS.from_documents(
+        new_vectorstore, num_added, num_skipped = add_documents_to_index(
             chunks,
-            embeddings
-        )
-
-        # -------------------------------------------------
-        # SAVE NEW INDEX
-        # -------------------------------------------------
-
-        new_vectorstore.save_local(
-            FAISS_INDEX_PATH
+            embeddings,
+            index_path=FAISS_INDEX_PATH,
+            existing_vectorstore=vectorstore,
         )
 
         # -------------------------------------------------
         # ONLY AFTER EVERYTHING SUCCEEDS,
-        # MAKE THE NEW VECTORSTORE ACTIVE
+        # MAKE THE UPDATED VECTORSTORE ACTIVE
         # -------------------------------------------------
 
         vectorstore = new_vectorstore
+        index_version += 1
+        response_cache.clear()  # the knowledge base changed; old cached answers are stale
 
-        print("NEW VECTORSTORE READY")
+        print(f"VECTORSTORE READY ({num_added} chunks added, {num_skipped} duplicate chunks skipped)")
         print("==============================\n")
 
         return jsonify({
             "status": "ok",
-            "chunks_added": len(chunks)
+            "chunks_added": num_added,
+            "chunks_skipped_duplicate": num_skipped
         })
 
     # -----------------------------------------------------
@@ -385,11 +413,13 @@ def ingest():
         import traceback
         traceback.print_exc()
 
-        # IMPORTANT:
-        # Do NOT allow the previous source to come back.
-        vectorstore = None
-
-        clear_saved_index()
+        # IMPORTANT (changed for incremental indexing):
+        # Do NOT wipe the existing knowledge base just because THIS
+        # upload failed — previously-ingested documents must survive
+        # a failed later upload. `vectorstore` still points at the
+        # last successfully-saved index (add_documents_to_index only
+        # reassigns it after a successful save_local), so there's
+        # nothing to roll back here.
 
         return jsonify({
             "status": "error",

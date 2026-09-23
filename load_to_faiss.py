@@ -1,4 +1,6 @@
 import os
+import hashlib
+from datetime import datetime, timezone
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -26,6 +28,11 @@ CHUNK_OVERLAP = 50
 OCR_PSM_MODE = "--psm 11"  # sparse text, no particular layout — good for scattered diagram labels
 
 
+def _now_iso() -> str:
+    """UTC ISO-8601 timestamp used as ingestion metadata across all loaders."""
+    return datetime.now(timezone.utc).isoformat()
+
+
 def preprocess_for_ocr(img: Image.Image) -> Image.Image:
     """Upscale small images and boost contrast to improve Tesseract accuracy."""
     if img.width < 1000:
@@ -37,12 +44,16 @@ def preprocess_for_ocr(img: Image.Image) -> Image.Image:
 
 
 def load_pdf(path: str) -> list[Document]:
-    """Load a PDF file into LangChain Documents, tagged with source metadata."""
+    """Load a PDF file into LangChain Documents, tagged with source metadata.
+    PyPDFLoader already attaches a 0-indexed "page" field to each Document
+    automatically — that's what citations.py's page_number field reads."""
     loader = PyPDFLoader(path)
     docs = loader.load()
+    ingested_at = _now_iso()
     for d in docs:
         d.metadata["source_type"] = "pdf"
         d.metadata["source_name"] = os.path.basename(path)
+        d.metadata["ingested_at"] = ingested_at
     return docs
 
 
@@ -60,7 +71,11 @@ def load_image(path: str) -> list[Document]:
         return []
     return [Document(
         page_content=text,
-        metadata={"source_type": "image", "source_name": os.path.basename(path)}
+        metadata={
+            "source_type": "image",
+            "source_name": os.path.basename(path),
+            "ingested_at": _now_iso(),
+        }
     )]
 
 
@@ -187,14 +202,31 @@ def load_youtube(url: str, use_whisper_fallback: bool = True) -> list[Document]:
 
     return [Document(
         page_content=full_text,
-        metadata={"source_type": "youtube", "source_name": url, "transcript_method": source_method}
+        metadata={
+            "source_type": "youtube",
+            "source_name": url,
+            "transcript_method": source_method,
+            "ingested_at": _now_iso(),
+        }
     )]
 
 
+def _chunk_hash(text: str) -> str:
+    """Content hash used to detect duplicate chunks during incremental
+    indexing (e.g. re-uploading the same PDF, or two sources that share
+    a boilerplate paragraph) so we never re-embed the same text twice."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
 def build_index(all_documents: list[Document], index_path: str = "faiss_index"):
-    """Chunk documents, embed them, and save a FAISS index to disk."""
+    """Chunk documents, embed them, and save a brand-new FAISS index to
+    disk — this is a full (re)build, used by the CLI dev entrypoint
+    below. For adding documents to an ALREADY-RUNNING app without
+    rebuilding everything, use add_documents_to_index() instead."""
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks = splitter.split_documents(all_documents)
+    for c in chunks:
+        c.metadata["content_hash"] = _chunk_hash(c.page_content)
 
     print(f"Total chunks created: {len(chunks)}")
 
@@ -203,6 +235,70 @@ def build_index(all_documents: list[Document], index_path: str = "faiss_index"):
     vectorstore.save_local(index_path)
     print(f"✅ Saved FAISS index to '{index_path}'")
     return vectorstore
+
+
+def add_documents_to_index(
+    chunks: list[Document],
+    embeddings,
+    index_path: str = "faiss_index",
+    existing_vectorstore: FAISS | None = None,
+) -> tuple[FAISS, int, int]:
+    """
+    Incremental indexing: embed and add ONLY chunks that aren't already
+    in the index (by content hash), instead of re-embedding and
+    rebuilding the entire FAISS index on every upload.
+
+    Pass `existing_vectorstore` when the caller already holds the live
+    in-memory index (this is how app.py uses it — avoids an extra
+    disk round-trip). If it's None, this will try to load one from
+    `index_path` on disk, and fall back to creating a fresh index if
+    none exists yet.
+
+    Returns (vectorstore, num_chunks_added, num_chunks_skipped_as_duplicate).
+    """
+    for c in chunks:
+        c.metadata.setdefault("content_hash", _chunk_hash(c.page_content))
+
+    vectorstore = existing_vectorstore
+    if vectorstore is None and os.path.isdir(index_path):
+        try:
+            vectorstore = FAISS.load_local(
+                index_path, embeddings, allow_dangerous_deserialization=True
+            )
+        except Exception as e:
+            print(f"⚠ Could not load existing index at '{index_path}' ({e}); starting fresh.")
+            vectorstore = None
+
+    if vectorstore is None:
+        # Nothing to add to yet — this IS the first build.
+        unique_chunks = list({c.metadata["content_hash"]: c for c in chunks}.values())
+        vectorstore = FAISS.from_documents(unique_chunks, embeddings)
+        vectorstore.save_local(index_path)
+        skipped = len(chunks) - len(unique_chunks)
+        return vectorstore, len(unique_chunks), skipped
+
+    existing_hashes = {
+        doc.metadata.get("content_hash")
+        for doc in vectorstore.docstore._dict.values()
+        if doc.metadata.get("content_hash")
+    }
+
+    new_chunks = []
+    seen_in_batch = set()
+    skipped = 0
+    for c in chunks:
+        h = c.metadata["content_hash"]
+        if h in existing_hashes or h in seen_in_batch:
+            skipped += 1
+            continue
+        seen_in_batch.add(h)
+        new_chunks.append(c)
+
+    if new_chunks:
+        vectorstore.add_documents(new_chunks)
+        vectorstore.save_local(index_path)
+
+    return vectorstore, len(new_chunks), skipped
 
 
 def main():

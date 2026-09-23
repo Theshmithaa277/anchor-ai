@@ -9,6 +9,8 @@ from guardrails import check_query_safety
 from reranker import rerank
 from citations import format_context_with_citations, print_citations
 from faithfulness import check_faithfulness
+from query_rewriter import rewrite_query
+from context_compressor import compress_documents
 
 load_dotenv()
 
@@ -61,6 +63,7 @@ def run_query(
 
     result = {
         "query": query,
+        "rewritten_query": query,
         "blocked": False,
         "answer": None,
         "citations": [],
@@ -74,8 +77,16 @@ def run_query(
         result["answer"] = "I can't help with that request."
         return result
 
+    # ---------------------------------------------------------
+    # QUERY REWRITING (retrieval only — the ORIGINAL query is still
+    # what gets answered below, so the response stays faithful to
+    # exactly what the user asked).
+    # ---------------------------------------------------------
+    search_query = rewrite_query(client, query, verbose=verbose)
+    result["rewritten_query"] = search_query
+
     raw_results = vectorstore.similarity_search(
-        query,
+        search_query,
         k=k_retrieve
     )
 
@@ -90,6 +101,12 @@ def run_query(
         raw_results,
         top_n=k_final
     )
+
+    # ---------------------------------------------------------
+    # CONTEXT COMPRESSION (trim each reranked chunk to its most
+    # query-relevant sentences before it goes into the prompt).
+    # ---------------------------------------------------------
+    top_docs = compress_documents(query, top_docs, max_chars=600)
 
     context, citation_list = format_context_with_citations(top_docs)
     result["citations"] = citation_list
