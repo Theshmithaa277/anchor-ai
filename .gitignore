@@ -25,3 +25,6 @@ eval_data/
 # Temporary files
 *.log
 *.tmp
+temp_audio*
+*.zip
+*.patch

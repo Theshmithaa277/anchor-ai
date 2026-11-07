@@ -283,6 +283,13 @@ def ingest():
                     print("Loading PDF...")
                     docs = load_pdf(tmp_path)
 
+                    # load_pdf() only sees the random temp filename, so
+                    # overwrite source_name with the user's real filename
+                    # here — otherwise citations show "tmpAbCdEf.pdf"
+                    # instead of the document's actual name.
+                    for d in docs:
+                        d.metadata["source_name"] = file.filename
+
                 elif suffix in [
                     ".png",
                     ".jpg",
@@ -292,6 +299,9 @@ def ingest():
 
                     print("Loading image...")
                     docs = load_image(tmp_path)
+
+                    for d in docs:
+                        d.metadata["source_name"] = file.filename
 
                 else:
 
@@ -437,4 +447,4 @@ if __name__ == "__main__":
         debug=True,
         port=5000,
         use_reloader=False
-    )
+    )

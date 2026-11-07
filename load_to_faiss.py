@@ -1,6 +1,10 @@
 import os
+import glob
 import hashlib
+import base64
+import uuid
 from datetime import datetime, timezone
+import imageio_ffmpeg
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -57,18 +61,62 @@ def load_pdf(path: str) -> list[Document]:
     return docs
 
 
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
+def _describe_image_with_vision_model(path: str) -> str | None:
+    """
+    Fallback for images where OCR finds no machine-readable text (e.g. a
+    diagram, chart, or illustration) — ask a vision-capable Groq model to
+    describe what's in the image instead, so it still becomes searchable
+    rather than being silently dropped.
+    """
+    try:
+        with open(path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+
+        response = _groq_client.chat.completions.create(
+            model=VISION_MODEL,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Describe all visible objects, labels, diagrams, "
+                                 "and important information in this image.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                    },
+                ],
+            }],
+        )
+        return (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"⚠ Vision-model fallback failed for {path}: {e}")
+        return None
+
+
 def load_image(path: str) -> list[Document]:
     """
-    Run OCR on an image and wrap the extracted text as a Document.
-    Known limitation: works well on text-dense images, fails on small/
-    stylized illustrations where there's little machine-readable text.
+    Run OCR on an image and wrap the extracted text as a Document. If OCR
+    finds nothing (common for diagrams/illustrations with little
+    machine-readable text), fall back to describing the image with a
+    vision model instead of dropping it entirely.
     """
     img = Image.open(path)
     img = preprocess_for_ocr(img)
-    text = pytesseract.image_to_string(img, config=OCR_PSM_MODE)
-    if not text.strip():
-        print(f"⚠ No text detected in image: {path}")
+    text = pytesseract.image_to_string(img, config=OCR_PSM_MODE).strip()
+
+    if not text:
+        print(f"ℹ No OCR text detected in {path}, trying vision-model fallback...")
+        text = _describe_image_with_vision_model(path)
+
+    if not text:
+        print(f"⚠ No text or description available for image: {path}")
         return []
+
     return [Document(
         page_content=text,
         metadata={
@@ -82,26 +130,38 @@ def load_image(path: str) -> list[Document]:
 def _transcribe_with_whisper(url: str) -> str | None:
     """
     Download audio via yt-dlp and transcribe with Groq's Whisper endpoint.
-    Note: uses a fixed temp filename, so this function is not safe to call
-    concurrently for multiple URLs at once (sequential use only).
+
+    Uses a unique filename per call (safe for concurrent use, unlike the
+    previous fixed "temp_audio" filename), and imageio_ffmpeg's bundled
+    ffmpeg binary instead of a hardcoded filesystem path — this works
+    identically on any machine with no install or PATH setup required.
     """
-    audio_path = "temp_audio.mp3"
+    unique_prefix = f"temp_audio_{uuid.uuid4().hex}"
+    audio_path = f"{unique_prefix}.mp3"
+
     try:
         ydl_opts = {
             "format": "bestaudio/best",
-            "outtmpl": "temp_audio.%(ext)s",
+            "outtmpl": f"{unique_prefix}.%(ext)s",
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
             }],
             "quiet": True,
-            # Point yt-dlp directly at ffmpeg's location instead of relying
-            # on system PATH — avoids PATH/environment-variable issues
-            # entirely. Update this if ffmpeg is installed elsewhere.
-            "ffmpeg_location": r"C:\Users\Shruthi\Downloads\ffmpeg\ffmpeg-8.1.2-essentials_build\bin",
+            "ffmpeg_location": os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe()),
+            # YouTube's anti-bot throttling (HTTP 403s) is one of the known
+            # failure modes here — a transient block is often recoverable
+            # on retry, so don't give up after a single attempt.
+            "retries": 3,
+            "fragment_retries": 3,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+
+        if not os.path.exists(audio_path):
+            print(f"⚠ Expected audio file not found after download for {url} "
+                  f"(download likely failed or was interrupted).")
+            return None
 
         with open(audio_path, "rb") as f:
             # translations.create (not transcriptions.create) — this outputs
@@ -118,8 +178,16 @@ def _transcribe_with_whisper(url: str) -> str | None:
         print(f"⚠ Whisper transcription failed for {url}: {e}")
         return None
     finally:
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+        # Clean up EVERYTHING matching this call's unique prefix, not just
+        # the one exact filename we expected — a failed/interrupted
+        # download can leave behind a differently-named partial file
+        # (e.g. "<prefix>.mp4.part" if ffmpeg's conversion step never
+        # ran), and that used to linger on disk indefinitely.
+        for leftover in glob.glob(f"{unique_prefix}*"):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
 
 
 def load_youtube(url: str, use_whisper_fallback: bool = True) -> list[Document]:
@@ -330,4 +398,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

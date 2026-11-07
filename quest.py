@@ -20,10 +20,12 @@ FAISS_INDEX_PATH = "faiss_index"
 
 RAG_SYSTEM_PROMPT = (
     "You are a helpful RAG assistant. "
+    "Always answer in English unless the user explicitly asks for another language. "
     "Answer only using the provided context. "
     "Do not use outside knowledge. "
     "If the answer is not present in the context, say "
     "'I don't know based on the provided context.' "
+    "Do not invent details. "
     "Keep the answer clear and structured using short paragraphs, "
     "bullet points, or numbered points when appropriate."
 )
@@ -52,11 +54,22 @@ def get_vectorstore(index_path: str = FAISS_INDEX_PATH) -> FAISS:
     )
 
 
+# Cross-encoder/ms-marco-MiniLM-L-6-v2 outputs raw (unbounded) relevance
+# logits, not a 0-1 probability. Per the model's documented behavior,
+# genuinely relevant query/passage pairs commonly score positive, while
+# clearly irrelevant pairs commonly score negative. This is a deliberately
+# conservative cutoff (only drops chunks the model is fairly confident are
+# unrelated) — tune it based on real-world testing against your own data
+# if wrong-source answers still slip through, or if relevant answers start
+# getting dropped.
+MIN_RERANK_SCORE = -2.0
+
+
 def run_query(
     query: str,
     client: Groq,
     vectorstore: FAISS,
-    k_retrieve: int = 13,
+    k_retrieve: int = 30,
     k_final: int = 4,
     verbose: bool = True,
 ) -> dict:
@@ -101,6 +114,24 @@ def run_query(
         raw_results,
         top_n=k_final
     )
+
+    # ---------------------------------------------------------
+    # RELEVANCE FLOOR (the actual fix for "wrong-source" answers
+    # bleeding in from an unrelated accumulated document — NOT
+    # solved by restricting retrieval to one source, since this app
+    # is explicitly meant to search across many accumulated
+    # documents at once). Drop chunks the cross-encoder scored as
+    # clearly unrelated; always keep at least the single best match
+    # so there's still something for the LLM to ground against (or
+    # correctly say "I don't know based on the provided context"
+    # about, per RAG_SYSTEM_PROMPT, if even that match is weak).
+    # ---------------------------------------------------------
+    if len(top_docs) > 1:
+        strong_docs = [
+            d for d in top_docs
+            if d.metadata.get("rerank_score", 0) >= MIN_RERANK_SCORE
+        ]
+        top_docs = strong_docs if strong_docs else top_docs[:1]
 
     # ---------------------------------------------------------
     # CONTEXT COMPRESSION (trim each reranked chunk to its most
@@ -170,4 +201,4 @@ if __name__ == "__main__":
         client=client,
         vectorstore=vectorstore,
         k_final=8
-    )
+    )
